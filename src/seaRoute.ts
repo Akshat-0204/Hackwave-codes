@@ -1,5 +1,4 @@
 import express, { Request, Response } from "express";
-import Sentiment from "sentiment";
 
 const router = express.Router();
 
@@ -15,10 +14,12 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
     const { placeName } = req.body as SeaAssessRequest;
 
     if (!placeName || typeof placeName !== "string") {
-      return res.status(400).json({ error: "Place name is required and must be a string" });
+      return res
+        .status(400)
+        .json({ error: "Place name is required and must be a string" });
     }
 
-    // 1. Fetch weather data from OpenWeatherAPI
+    // 1. Fetch weather data
     const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
       placeName
     )}&appid=${OPENWEATHER_API_KEY}`;
@@ -29,15 +30,21 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
 
     console.log("Weather Data:", weatherData);
 
-    // 2. Send weather data to Gemini for risk assessment
+    // 2. Ask Gemini for structured risk analysis
     const geminiPayload = {
       contents: [
         {
           parts: [
             {
-              text: `Analyze this forecast for risks and disruptions and give us 4-5 crisp points summarising the result of the prompt. Do not be vague, be very specific. Also at the end recommend whether we should send our package or not: ${JSON.stringify(
-                weatherData
-              )}`,
+              text: `
+Analyze this weather forecast data and return ONLY a JSON object with the following fields:
+- assessment: 4-5 crisp, very specific points (array of strings).
+- riskScore: a number between -10 (very risky) to +10 (very safe).
+- riskLevel: one of ["Very Risky", "Risky", "Moderate", "Safe", "Very Safe"].
+- recommendation: "Send the package" or "Do not send the package".
+
+Weather data: ${JSON.stringify(weatherData)}
+              `,
             },
           ],
         },
@@ -57,21 +64,25 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
     console.log("Gemini Response:", geminiData);
 
     if (!geminiResp.ok) {
-      throw new Error(`Gemini API Error: ${geminiData.error?.message || "Unknown error"}`);
+      throw new Error(
+        `Gemini API Error: ${geminiData.error?.message || "Unknown error"}`
+      );
     }
 
-    // 3. Extract Gemini AI analysis text
-    const geminiAssessment =
-      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "No assessment received";
+    // 3. Extract Gemini AI analysis
+    const rawText =
+      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
 
-    // 4. Perform sentiment analysis on the Gemini assessment
-    const sentiment = new Sentiment();
-    const sentimentResult = sentiment.analyze(geminiAssessment);
+    let structuredResponse;
+    try {
+      structuredResponse = JSON.parse(rawText);
+    } catch (e) {
+      throw new Error("Failed to parse Gemini response as JSON");
+    }
 
-    // Adjust the riskScore to a scale between -10 to 10
-    const riskScore = Math.max(Math.min(sentimentResult.score, 10), -10); // Clamp the score between -10 and 10
+    const { assessment, riskScore, recommendation } = structuredResponse;
 
-    // 5. Determine risk level and color code based on the adjusted riskScore
+    // 4. Apply your custom riskLevel + colorCode mapping
     let riskLevel = "Neutral";
     let colorCode = "gray";
 
@@ -89,20 +100,22 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
       colorCode = "orange";
     }
 
-    // 6. Return the response with risk level and color code
+    // 5. Send clean response back
     res.json({
       placeName,
       weatherData,
-      geminiAssessment: JSON.stringify(geminiAssessment),
-      riskScore, // Return the raw score between -10 and 10
+      assessment,
+      riskScore,
+      recommendation,
       riskLevel,
       colorCode,
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: (err as Error).message || "Internal server error" });
+    res
+      .status(500)
+      .json({ error: (err as Error).message || "Internal server error" });
   }
 });
 
 export default router;
-
