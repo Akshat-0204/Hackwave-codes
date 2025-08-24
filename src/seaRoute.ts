@@ -68,30 +68,25 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
     const sentiment = new Sentiment();
     const sentimentResult = sentiment.analyze(geminiAssessment);
 
-    // Fix: Adjust the normalization logic for riskScore
-    const maxSentimentScore = 20; // Define a maximum sentiment score for scaling
-    const normalizedScore = Math.abs(sentimentResult.score); // Use absolute value to handle negative scores
-    const riskScore = Math.min((normalizedScore / maxSentimentScore) * 100, 100); // Scale to 0-100%
+    // Adjust the riskScore to a scale between -10 to 10
+    const riskScore = Math.max(Math.min(sentimentResult.score, 10), -10); // Clamp the score between -10 and 10
 
-    // 5. Determine risk level and color code
-    let riskLevel = "No Risk";
-    let colorCode = "green";
+    // 5. Determine risk level and color code based on the adjusted riskScore
+    let riskLevel = "Neutral";
+    let colorCode = "gray";
 
-    if (riskScore > 80) {
-      riskLevel = "Critical Risk";
-      colorCode = "darkred";
-    } else if (riskScore > 60) {
-      riskLevel = "High Risk";
-      colorCode = "red";
-    } else if (riskScore > 40) {
-      riskLevel = "Moderate Risk";
-      colorCode = "orange";
-    } else if (riskScore > 20) {
-      riskLevel = "Low Risk";
-      colorCode = "yellow";
-    } else {
-      riskLevel = "No Risk";
+    if (riskScore > 5) {
+      riskLevel = "Positive Sentiment";
       colorCode = "green";
+    } else if (riskScore > 0) {
+      riskLevel = "Slightly Positive";
+      colorCode = "lightgreen";
+    } else if (riskScore < -5) {
+      riskLevel = "Negative Sentiment";
+      colorCode = "red";
+    } else if (riskScore < 0) {
+      riskLevel = "Slightly Negative";
+      colorCode = "orange";
     }
 
     // 6. Return the response with risk level and color code
@@ -99,7 +94,7 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
       placeName,
       weatherData,
       geminiAssessment: JSON.stringify(geminiAssessment),
-      riskScore: Math.round(riskScore * 100) / 100, // Round to 2 decimal places
+      riskScore, // Return the raw score between -10 and 10
       riskLevel,
       colorCode,
     });
