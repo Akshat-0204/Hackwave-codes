@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import Sentiment from "sentiment";
 
 const router = express.Router();
 
@@ -14,12 +15,10 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
     const { placeName } = req.body as SeaAssessRequest;
 
     if (!placeName || typeof placeName !== "string") {
-      return res
-        .status(400)
-        .json({ error: "Place name is required and must be a string" });
+      return res.status(400).json({ error: "Place name is required and must be a string" });
     }
 
-    // 1. Fetch weather data
+    // 1. Fetch weather data from OpenWeatherAPI
     const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
       placeName
     )}&appid=${OPENWEATHER_API_KEY}`;
@@ -30,21 +29,15 @@ router.post("/sea/assess", async (req: Request, res: Response) => {
 
     console.log("Weather Data:", weatherData);
 
-    // 2. Ask Gemini for structured risk analysis
+    // 2. Send weather data to Gemini for risk assessment
     const geminiPayload = {
       contents: [
         {
           parts: [
             {
-              text: `
-Analyze this weather forecast data and return ONLY a JSON object with the following fields:
-- assessment: 4-5 crisp, very specific points (array of strings).
-- riskScore: a number between -10 (very risky) to +10 (very safe).
-- riskLevel: one of ["Very Risky", "Risky", "Moderate", "Safe", "Very Safe"].
-- recommendation: "Send the package" or "Do not send the package".
-
-Weather data: ${JSON.stringify(weatherData)}
-              `,
+              text: `Analyze this forecast for risks and disruptions and give us 4-5 crisp points summarising the result of the prompt. Do not be vague, be very specific. Also at the end recommend whether we should send our package or not. Additionally, provide a risk score between -10 to 10 and a corresponding color code for the risk level: ${JSON.stringify(
+                weatherData
+              )}`,
             },
           ],
         },
@@ -64,58 +57,37 @@ Weather data: ${JSON.stringify(weatherData)}
     console.log("Gemini Response:", geminiData);
 
     if (!geminiResp.ok) {
-      throw new Error(
-        `Gemini API Error: ${geminiData.error?.message || "Unknown error"}`
-      );
+      throw new Error(`Gemini API Error: ${geminiData.error?.message || "Unknown error"}`);
     }
 
-    // 3. Extract Gemini AI analysis
-    const rawText =
-      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    // 3. Extract Gemini AI analysis text, risk score, and assign color code based on risk level
+    const geminiAssessment =
+      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "No assessment received";
+    const riskScore = geminiData?.candidates?.[0]?.content?.parts?.[0]?.riskScore || 0; // Default to 0 if not provided
 
-    let structuredResponse;
-    try {
-      structuredResponse = JSON.parse(rawText);
-    } catch (e) {
-      throw new Error("Failed to parse Gemini response as JSON");
+    // Assign color code based on risk score
+    let colorCode = "gray"; // Default color
+    if (riskScore <= -5) {
+      colorCode = "green"; // Least risk
+    } else if (riskScore > -5 && riskScore <= 5) {
+      colorCode = "yellow"; // Mid risk
+    } else if (riskScore > 5) {
+      colorCode = "red"; // High risk
     }
 
-    const { assessment, riskScore, recommendation } = structuredResponse;
-
-    // 4. Apply your custom riskLevel + colorCode mapping
-    let riskLevel = "Neutral";
-    let colorCode = "gray";
-
-    if (riskScore > 5) {
-      riskLevel = "Positive Sentiment";
-      colorCode = "green";
-    } else if (riskScore > 0) {
-      riskLevel = "Slightly Positive";
-      colorCode = "lightgreen";
-    } else if (riskScore < -5) {
-      riskLevel = "Negative Sentiment";
-      colorCode = "red";
-    } else if (riskScore < 0) {
-      riskLevel = "Slightly Negative";
-      colorCode = "orange";
-    }
-
-    // 5. Send clean response back
+    // 4. Return the response with risk level and color code
     res.json({
       placeName,
       weatherData,
-      assessment,
-      riskScore,
-      recommendation,
-      riskLevel,
-      colorCode,
+      geminiAssessment: JSON.stringify(geminiAssessment),
+      riskScore, // Risk score provided by Gemini
+      colorCode, // Color code based on risk score
     });
   } catch (err) {
     console.error(err);
-    res
-      .status(500)
-      .json({ error: (err as Error).message || "Internal server error" });
+    res.status(500).json({ error: (err as Error).message || "Internal server error" });
   }
 });
 
 export default router;
+
